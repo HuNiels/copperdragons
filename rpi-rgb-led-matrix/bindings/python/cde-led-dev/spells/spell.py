@@ -28,7 +28,7 @@ if not selected_spell:
 
 from samplebase import SampleBase
 
-FRAME_DATA_FOLDER = Path(f"../pixel-data/{selected_spell}")
+FRAME_DATA_FOLDER = Path(f"../spell-data/{selected_spell}")
 FRAME_TIME = 0.1
 
 GRID = "grid"
