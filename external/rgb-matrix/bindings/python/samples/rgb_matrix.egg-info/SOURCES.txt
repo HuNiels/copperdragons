@@ -1,0 +1,7 @@
+COPYING
+README.md
+pyproject.toml
+bindings/python/samples/rgb_matrix.egg-info/PKG-INFO
+bindings/python/samples/rgb_matrix.egg-info/SOURCES.txt
+bindings/python/samples/rgb_matrix.egg-info/dependency_links.txt
+bindings/python/samples/rgb_matrix.egg-info/top_level.txt

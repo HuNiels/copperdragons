@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 import json
 
-from cde_led_dev.samplebase import SampleBase # type: ignore
+from samplebase import SampleBase
 
 #Define what spell to 'cast', lowercase
 valid_spells = ["fireball", "void"]
