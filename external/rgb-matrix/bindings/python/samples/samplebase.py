@@ -3,8 +3,49 @@ import time
 import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/..'))
-from rgbmatrix import RGBMatrix, RGBMatrixOptions
+try:
+    from rgbmatrix import RGBMatrix, RGBMatrixOptions
+except ImportError:
+    # Mock implementations for development on systems without rgbmatrix
+    class RGBMatrixOptions:
+        def __init__(self):
+            self.hardware_mapping = None
+            self.rows = 32
+            self.cols = 32
+            self.chain_length = 1
+            self.parallel = 1
+            self.pwm_bits = 11
+            self.brightness = 100
+            self.scan_mode = 1
+            self.pwm_lsb_nanoseconds = 130
+            self.show_refresh = False
+            self.slowdown_gpio = 3
+            self.no_hardware_pulse = None
+            self.rgb_sequence = "RGB"
+            self.pixel_mapper = ""
+            self.row_addr_type = 0
+            self.multiplexing = 0
+            self.panel_type = ""
+            self.drop_privileges = True
+
+    class FrameCanvas:
+        def __init__(self):
+            pass
+
+        def SetPixel(self, x, y, r, g, b):
+            # Mock: Do nothing
+            pass
+
+    class RGBMatrix:
+        def __init__(self, options):
+            self.options = options
+
+        def CreateFrameCanvas(self):
+            return FrameCanvas()
+
+        def SwapOnVSync(self, canvas):
+            # Mock: Do nothing
+            pass
 
 
 class SampleBase(object):
