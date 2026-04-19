@@ -1,8 +1,7 @@
 #!/usr/bin/env python
-from attr import dataclass
+from dataclasses import dataclass
 
 from samplebase import SampleBase
-from dataclasses import dataclass
 
 IMAGE_WIDTH = 32
 IMAGE_HEIGHT = 32
@@ -23,7 +22,7 @@ class ImageBase:
     image_matrix: list[list] = [[0x00 for x in range(IMAGE_WIDTH)] for y in range(IMAGE_HEIGHT)]
     image_colours = Colours()
 
-class SimpleSquar(SampleBase):
+class SimpleSquare(SampleBase):
     def __init__(self, *args, **kwargs):
         super(SimpleSquare, self).__init__(*args, **kwargs)
 
