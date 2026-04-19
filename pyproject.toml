@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "copperdragons"
 version = "0.1.0"
+dependencies = [
+    "Pillow>=10.0.0"
+]
 
 [tool.setuptools]
 package-dir = {"" = "external/rgb-matrix/bindings/python/samples"}

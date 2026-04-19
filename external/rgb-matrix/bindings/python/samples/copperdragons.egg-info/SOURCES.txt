@@ -3,4 +3,9 @@ pyproject.toml
 external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/PKG-INFO
 external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/SOURCES.txt
 external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/dependency_links.txt
+external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/requires.txt
+external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/top_level.txt
+external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/PKG-INFO
+external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/SOURCES.txt
+external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/dependency_links.txt
 external/rgb-matrix/bindings/python/samples/copperdragons.egg-info/top_level.txt
