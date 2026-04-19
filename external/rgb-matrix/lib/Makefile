@@ -127,7 +127,7 @@ HARDWARE_DESC?=regular
 # between refresh rate (which is reduce the higher this value is) and
 # flicker suppression (which is better with higher values).
 # Flag: --led-limit-refresh
-#DEFINES+=-DFIXED_FRAME_MICROSECONDS=5000
+DEFINES+=-DFIXED_FRAME_MICROSECONDS=2000
 
 # When limiting refrash rate, a CPU core is busy waiting to get accurate
 # timing. On single board systems, this results in an unresponsive system.
