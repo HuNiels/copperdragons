@@ -1,0 +1,15 @@
+# On Raspberry Pi OS Bookworm / Trixie (Python 3.11+), the recommended setup is
+# a venv created with --system-site-packages that inherits the apt-installed
+# packages below. In that case `pip install -r requirements.txt` is a no-op:
+#
+#     sudo apt install python3-spidev python3-gpiozero python3-rpi-lgpio
+#     python3 -m venv --system-site-packages /home/cde/copperdragons/.venv
+#
+# The entries here are for any other distro where you want pip to resolve them.
+# Note: upstream `RPi.GPIO` does not build on Python 3.13; `rpi-lgpio` is a
+# drop-in shim that implements the same API on top of the kernel's gpiochip
+# interface. pyPN5180 only uses `import RPi.GPIO`, so this works transparently.
+
+spidev>=3.5
+rpi-lgpio>=0.6
+gpiozero>=2.0
