@@ -1,7 +1,0 @@
-COPYING
-README.md
-pyproject.toml
-rgb_matrix.egg-info/PKG-INFO
-rgb_matrix.egg-info/SOURCES.txt
-rgb_matrix.egg-info/dependency_links.txt
-rgb_matrix.egg-info/top_level.txt

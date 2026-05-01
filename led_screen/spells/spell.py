@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import os
 import sys
 import time
 
@@ -6,6 +7,9 @@ from pathlib import Path
 import json
 
 from samplebase import SampleBase
+
+# One-shot spell: play all frames or stop after this many seconds (whichever is shorter), then clear the panel.
+SPELL_MAX_SECONDS = float(os.environ.get("SPELL_MAX_SECONDS", "10"))
 
 #Define what spell to 'cast', lowercase
 valid_spells = ["fireball", "void"]
@@ -41,10 +45,14 @@ class Spell(SampleBase):
         super(Spell, self).__init__(*args, **kwargs)
 
     def run(self):
-        while(True):
-            with open(f"{FRAME_DATA_FOLDER}/{selected_spell}-colours.json", "r") as f:
-                spell_matrix_colours = json.load(f)
+        deadline = time.monotonic() + SPELL_MAX_SECONDS
+        colours_path = f"{FRAME_DATA_FOLDER}/{selected_spell}-colours.json"
+        with open(colours_path, "r") as f:
+            spell_matrix_colours = json.load(f)
+        try:
             for frame in range(FRAMES):
+                if time.monotonic() >= deadline:
+                    break
                 with open(f"{FRAME_DATA_FOLDER}/{selected_spell}-frame_{frame}.json", "r") as f:
                     spell_matrix = json.load(f)
 
@@ -62,6 +70,8 @@ class Spell(SampleBase):
                 self.matrix.SwapOnVSync(offset_canvas)
 
                 time.sleep(FRAME_TIME)
+        finally:
+            self.matrix.Clear()
     
 # Main function
 if __name__ == "__main__":

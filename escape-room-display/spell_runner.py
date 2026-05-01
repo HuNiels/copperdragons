@@ -1,9 +1,9 @@
 """
 Manage the lifecycle of a single running `spell.py` subprocess.
 
-Why subprocess: `spell.py` has an infinite `while True` animation loop and
-owns the RGB matrix. Easiest / lowest-risk integration is: start it, kill it
-on swap, start the next one.
+Why subprocess: `spell.py` owns the RGB matrix. It plays once (or until
+SPELL_MAX_SECONDS), clears the panel, and exits. POST /spell still replaces any
+running spell by killing the old process first.
 """
 from __future__ import annotations
 
