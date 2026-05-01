@@ -1,6 +1,6 @@
 ---
 name: Trim rgb-matrix vendor
-overview: Shrink `external/rgb-matrix` by deleting upstream-only assets (hardware adapters, demos, alternate bindings, CI), fixing the top-level Makefile so builds no longer compile demos, moving `samplebase.py` into `led_screen` so the vendored tree only holds the library + Python bindings, optionally dropping the unused Python `graphics` extension, and validating via a multi-step verification checklist (build, imports, Pi smoke test, escape-room integration).
+overview: Shrink `external/rgb-matrix` by deleting upstream-only assets (hardware adapters, demos, alternate bindings, CI), fixing the top-level Makefile so builds no longer compile demos, moving `samplebase.py` into `led_screen` so the vendored tree only holds the library + Python bindings, optionally dropping the unused Python `graphics` extension, and validating via a multi-step verification checklist (build, imports, Pi smoke test, escape-room integration). After every milestone, run the `void` spell on the panel as a per-step display gate so the LED stays usable throughout the trim.
 todos:
   - id: delete-cruft-dirs
     content: Remove adapter/, bindings/c#/, examples-api-use/, utils/, .github/ under external/rgb-matrix; clean egg-info cruft
@@ -16,6 +16,9 @@ todos:
     status: pending
   - id: vendor-readme
     content: Replace huge README with short vendor note + keep COPYING
+    status: pending
+  - id: gate-void-after-each-step
+    content: After each milestone, run the void spell display gate (rebuild + reinstall first when the milestone touched build/install) per the "Display gate after each milestone" section
     status: pending
   - id: verify-build
     content: "Run full verification checklist: build, pip, imports, spell subprocess, optional API"
@@ -64,6 +67,47 @@ In [external/rgb-matrix/Makefile](external/rgb-matrix/Makefile), the `$(RGB_LIBR
 
 Replace or heavily trim [external/rgb-matrix/README.md](external/rgb-matrix/README.md) with a short **Copperdragons vendor note**: upstream project URL, original commit/hash if known, what was stripped, and how to build (`make build-python`). Keeps legal notice / [COPYING](external/rgb-matrix/COPYING) intact.
 
+## Display gate after each milestone
+
+After every milestone above, run the same on-panel smoke test using the **`void`** spell. This keeps the LED screen demonstrably usable throughout the trim and catches regressions at the step that introduced them.
+
+### Canonical gate command
+
+Run from the repo root on the Pi (or production-equivalent Linux + matrix), in the project venv:
+
+```bash
+sudo SPELL_MAX_SECONDS=5 /home/cde/copperdragons/.venv/bin/python spell.py void
+```
+
+executed with `cwd=led_screen/spells`. This matches how [escape-room-display/spell_runner.py](escape-room-display/spell_runner.py) launches spells (`cwd=led_screen/spells`, explicit venv interpreter, `sudo`) and how [escape-room-display/README.md](escape-room-display/README.md) documents manual invocations.
+
+- **Working directory** must be `led_screen/spells` because [`FRAME_DATA_FOLDER = Path(f"../spell-data/{selected_spell}")`](led_screen/spells/spell.py) is resolved relative to it.
+- **Privileges:** `sudo` is required for matrix GPIO access.
+- **Interpreter:** use the venv Python explicitly so the gate exercises the same install you just (re)built.
+- **Duration:** [`SPELL_MAX_SECONDS`](led_screen/spells/spell.py) defaults to 10s; override to 5s for fast iteration. Ctrl-C also works.
+
+**Pass criteria:** no traceback, the void animation is visible on the panel, the process exits cleanly and the panel is cleared by the `finally: self.matrix.Clear()` block.
+
+### Rebuild before the gate?
+
+| After this milestone | Rebuild + reinstall first? |
+|------------------------|----------------------------|
+| Delete cruft dirs (`adapter/`, `bindings/c#/`, `examples-api-use/`, `utils/`, `.github/`, egg-info) | **No** — `librgbmatrix` and the editable `rgbmatrix` install are unchanged. Optionally run `make -C external/rgb-matrix build-python` if you want extra confidence the build still resolves. |
+| Makefile patch (drop `examples-api-use` from `$(RGB_LIBRARY)`, fix `clean`) | **Yes** — `make -C external/rgb-matrix clean && make -C external/rgb-matrix build-python`, then `pip install -e external/rgb-matrix/bindings/python`. The gate then validates the new build graph. |
+| Move `samplebase` + delete vendored `samples/` + update `scripts/setup.sh` | **Yes** — rerun the relevant `pip install` lines from the updated [scripts/setup.sh](scripts/setup.sh) (the `samples` install line must be gone). The gate then proves `from samplebase import SampleBase` resolves to [led_screen/spells/samplebase.py](led_screen/spells/samplebase.py) and frame data still loads. |
+| Optional: drop Python `graphics` extension | **Yes** — reinstall `external/rgb-matrix/bindings/python`. The gate confirms `core` still loads and drives the panel. Note `void` does not exercise `rgbmatrix.graphics` (only [`runtext.py`](led_screen/spells/runtext.py) does), so a passing void gate does **not** by itself prove `runtext.py` still works after this step. |
+| Vendor README trim | **No** — documentation only; rerun the gate only if you want a sanity check. |
+
+### Per-milestone gate checkpoints
+
+- **After `delete-cruft-dirs`:** run the gate. No rebuild required.
+- **After `makefile-no-demos`:** rebuild + reinstall, then run the gate.
+- **After `move-samplebase`:** apply the [scripts/setup.sh](scripts/setup.sh) edit and reinstall, then run the gate (this step is the most likely to break the spell path).
+- **After `optional-graphics-ext`:** reinstall bindings, then run the gate.
+- **After `vendor-readme`:** gate optional.
+
+If any gate fails, fix the regression in that milestone before moving on.
+
 ## Verification (after implementation)
 
 Treat these as **gates**: fix failures before merging. Order matters least for (1)–(3) on dev vs Pi; **hardware steps need a Pi** (or equivalent Linux + matrix).
@@ -82,8 +126,8 @@ Treat these as **gates**: fix failures before merging. Order matters least for (
 
 ### 3. Matrix hardware smoke test (Raspberry Pi / production-like)
 
-- `cd led_screen/spells` and run **`sudo python spell.py fireball`** (or `void`), same as production privilege model. Expect: no traceback, animation visible on the panel. Ctrl-C to stop.
-- Repeat with the second spell to confirm argv parsing still works.
+- Run the **canonical void gate** from the "Display gate after each milestone" section (same `sudo` + venv interpreter + `cwd=led_screen/spells` invocation). This is the same probe used between trim steps, so a clean run here confirms nothing regressed across the whole sequence.
+- Then run **`sudo /home/cde/copperdragons/.venv/bin/python spell.py fireball`** from `led_screen/spells` to confirm argv parsing still selects a different spell and the second animation also plays end-to-end.
 
 ### 4. Escape-room integration (end-to-end)
 
