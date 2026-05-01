@@ -25,12 +25,10 @@ echo "Detected system: $UNAME"
 if [[ "$UNAME" == "Linux"* ]]; then
     make -C external/rgb-matrix build-python || true
     pip install -e external/rgb-matrix/bindings/python
-    pip install -e external/rgb-matrix/bindings/python/samples
 else
     echo "Installing Python-only rgb-matrix bindings (no C build)"
 
     pip install -e external/rgb-matrix/bindings/python
-    pip install -e external/rgb-matrix/bindings/python/samples
 fi
 
 echo "Setup complete!"
