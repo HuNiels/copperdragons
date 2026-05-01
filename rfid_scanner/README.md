@@ -1,8 +1,18 @@
 # PN5180 RFID scanner (copperdragons)
 
-A tiny standalone script that uses a PN5180 module over SPI to print the UIDs
-of any ISO 14443-A tags (MIFARE Classic/Ultralight, NTAG, most NFC stickers)
-that come near the antenna.
+A multi-scanner framework for PN5180 modules over SPI. Each scanner runs in its
+own thread, polls ISO 14443-A tags (MIFARE Classic/Ultralight, NTAG, most NFC
+stickers), and reports to a controller. The controller `POST`s a spell to the
+[`escape-room-display`](../escape-room-display/) HTTP API when the *combined*
+per-scanner state matches a configured combo. A single-scanner test mode is
+provided for hardware validation; see
+[tag_spells.example.json](tag_spells.example.json) and
+[combo_spells.example.json](combo_spells.example.json).
+
+> Caveat: pyPN5180 currently hard-codes SPI bus 0 / device 0 and BUSY GPIO 25
+> (see section 1). Multi-PN5180 hardware on a single Pi will need a follow-up
+> patch to the vendored library; the software framework here is ready for it
+> via a `Reader` factory.
 
 Uses [fservida/pyPN5180](https://github.com/fservida/pyPN5180), vendored at
 [`external/pyPN5180/`](../external/pyPN5180/) alongside the existing
@@ -75,20 +85,69 @@ Run it:
 
 ```bash
 cd /home/cde/copperdragons
-python rfid_scanner/scan.py            # normal console output
-python rfid_scanner/scan.py -v         # plus library SPI/IRQ trace
-python rfid_scanner/scan.py --interval 0.1   # poll faster
+python rfid_scanner/src/scan.py                      # one scanner named "default", combo mode
+python rfid_scanner/src/scan.py -v                   # plus library SPI/IRQ trace
+python rfid_scanner/src/scan.py --scanner A,B        # two scanners "A" and "B", combo mode
+python rfid_scanner/src/scan.py --test-scanner A     # single scanner "A" in test mode
+python rfid_scanner/src/scan.py --smoke-test         # in-process MockReader self-check, then exit
 ```
 
-Expected output when you tap a MIFARE card on the antenna:
+Typical combo-mode options when pointing at the display Pi:
+
+```bash
+python rfid_scanner/src/scan.py \
+  --scanner A --scanner B \
+  --display-url http://raspberrypi:8765 \
+  --tag-spells rfid_scanner/tag_spells.json \
+  --combo-spells rfid_scanner/combo_spells.json \
+  --spell-cooldown 60
+```
+
+Expected output (timestamps abbreviated):
 
 ```
-2026-04-24 17:10:02 INFO scanner up; Ctrl-C to quit
-2026-04-24 17:10:04 INFO TAG ENTER 04a224fa9b6e80
-2026-04-24 17:10:06 INFO TAG LEAVE 04a224fa9b6e80
+INFO framework up; scanners=A,B display=http://raspberrypi:8765 combos=2 cooldown=60s; Ctrl-C to quit
+INFO scanner[A] up
+INFO scanner[B] up
+INFO scanner[A] poll: hit uids=63aa5531
+INFO controller: A - -> fire (uid=63aa5531)
+INFO scanner[B] poll: hit uids=b2f28804
+INFO controller: B - -> ice (uid=b2f28804)
+INFO controller: combo {A=fire, B=ice} -> void
+INFO display -> POST http://raspberrypi:8765/spell source={A=fire, B=ice} spell=void (combo)
+INFO display <- slave OK HTTP 200 in 12 ms
 ```
 
-Ctrl-C exits cleanly.
+Ctrl-C exits cleanly (`framework down` is logged).
+
+### How combos work
+
+Two JSON files drive the framework:
+
+1. [tag_spells.json](tag_spells.example.json) — `{ UID: element }`. Maps each
+   physical tag to a short element name (e.g. `fire`, `ice`).
+2. [combo_spells.json](combo_spells.example.json) — list of
+   `{ "match": { scanner_id: element, ... }, "spell": ... }` rules. The
+   controller fires the named spell only when **every** scanner has a tag in
+   its field and the resulting state matches a `match` exactly. Per-scanner
+   pairing is significant: `{A: fire, B: ice}` and `{A: ice, B: fire}` can map
+   to different spells.
+
+The controller fires once per state transition (no spamming while the state
+is held) and respects `--spell-cooldown` per combo.
+
+### Test mode (single scanner)
+
+`--test-scanner ID` runs only that scanner with the legacy per-tag behavior:
+
+- `tag_spells.json` is treated as `{ UID: spell }` (the element name *is* the
+  spell), and the spell is POSTed directly on tag presence.
+- An unknown UID on a TTY prompts once to bind a spell to
+  `tag_spells.json`. `--no-bind-prompt` disables this for headless setups.
+- Per-UID cooldown via `--spell-cooldown` (same as the original single-scanner
+  script).
+
+Use this to validate one PN5180 at a time without touching combo logic.
 
 ## 4. Troubleshooting
 
@@ -116,9 +175,11 @@ Ctrl-C exits cleanly.
 
 ## 5. What this does not do (yet)
 
-- Trigger anything on the [`escape-room-display`](../escape-room-display/) LED
-  node -- this script only logs. Mapping UIDs -> spells can live in a later
-  change.
+- Drive multiple PN5180s on a single Pi at the hardware level. The
+  framework supports N scanners in software (one thread each), but pyPN5180
+  hard-codes SPI bus/device and BUSY GPIO. Until the vendored library is
+  patched to accept those as constructor args, multi-PN5180 hardware is not
+  supported. Use `--mock-readers` for software-side testing in the meantime.
 - Software reset of the PN5180 (would need `RST` on a GPIO and a pulse via
   `gpiozero.DigitalOutputDevice` before constructing the reader).
 - Auto-start on boot. If you want that, copy the pattern from
