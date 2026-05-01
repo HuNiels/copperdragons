@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 
-from config import build_parser, config_from_args
+from config import ScannerConfig, build_parser, config_from_args
 from controller import SpellController
 from reader import Reader, make_reader
 from runner import run_all, run_test_mode
@@ -24,13 +24,27 @@ from storage import load_combo_spells, load_tag_spells
 log = logging.getLogger("rfid")
 
 
+def _configure_logging(cfg: ScannerConfig) -> None:
+    level = logging.DEBUG if cfg.debug_logging else logging.INFO
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    # ``force=True`` (Py 3.8+): replace any prior root handlers so DEBUG level
+    # applies when running under wrappers that configure logging first.
+    try:
+        logging.basicConfig(level=level, format=fmt, force=True)
+    except TypeError:
+        logging.basicConfig(level=level, format=fmt)
+    if cfg.log_file is not None:
+        fh = logging.FileHandler(cfg.log_file, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        fh.setLevel(level)
+        logging.getLogger().addHandler(fh)
+
+
 def main() -> int:
     args = build_parser().parse_args()
     cfg = config_from_args(args)
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
+    _configure_logging(cfg)
 
     if cfg.smoke_test:
         return run_smoke_test()

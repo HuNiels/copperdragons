@@ -13,7 +13,7 @@ import time
 
 from config import ScannerConfig, ScannerHardware
 from controller import SpellController
-from reader import Reader
+from reader import Reader, recover_pn5180
 from sender import send_spell_to_slave
 from storage import handle_unknown_tag
 
@@ -33,11 +33,37 @@ def scan_one(
     try:
         while not stop.is_set():
             try:
+                # Log before inventory: poll lines only appeared after inventory()
+                # returned, so a blocking PN5180/BUSY wait looked like "no logging".
+                log.debug("scanner[%s] inventory starting", hw.scanner_id)
                 uids = set(reader.inventory())
+            except KeyboardInterrupt:
+                raise
+            except RuntimeError as e:
+                if "BUSY stayed high" in str(e):
+                    log.warning(
+                        "scanner[%s] PN5180 BUSY timeout — RF_OFF recovery (check power/heat/wiring if this repeats)",
+                        hw.scanner_id,
+                    )
+                    try:
+                        recover_pn5180(reader)
+                    except Exception:
+                        log.exception("scanner[%s] PN5180 recovery failed", hw.scanner_id)
+                    stop.wait(cfg.interval)
+                    continue
+                log.exception("scanner[%s] inventory failed", hw.scanner_id)
+                stop.wait(cfg.interval)
+                continue
             except Exception:
                 log.exception("scanner[%s] inventory failed", hw.scanner_id)
                 stop.wait(cfg.interval)
                 continue
+
+            log.debug(
+                "scanner[%s] poll uids=%s",
+                hw.scanner_id,
+                ",".join(sorted(uids)) if uids else "-",
+            )
 
             if not cfg.quiet_polls:
                 if uids:
@@ -100,14 +126,15 @@ def run_test_mode(cfg: ScannerConfig, scanner_id: str, reader: Reader, tag_spell
     last_spell_at: dict[str, float] = {}
     binding_prompted: set[str] = set()
 
-    stop = False
+    # Do not override SIGINT: the default raises KeyboardInterrupt on the main
+    # thread so Ctrl-C exits without waiting for a full inventory() round trip.
+    # A custom handler that only set a flag made shutdown depend on inventory()
+    # returning, which feels like "Ctrl-C does nothing" when the reader is slow
+    # or stuck inside pyPN5180.
+    def _sigterm(_sig: int, _frame: object) -> None:
+        raise KeyboardInterrupt
 
-    def _stop(*_: object) -> None:
-        nonlocal stop
-        stop = True
-
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGTERM, _sigterm)
 
     log.info(
         "test-mode up; scanner=%s display=%s default_spell=%s tag_spells=%s (%d uid(s)) cooldown=%ss; Ctrl-C to quit",
@@ -119,13 +146,37 @@ def run_test_mode(cfg: ScannerConfig, scanner_id: str, reader: Reader, tag_spell
         cfg.spell_cooldown,
     )
     try:
-        while not stop:
+        while True:
             try:
+                log.debug("scanner[%s] inventory starting", scanner_id)
                 uids = set(reader.inventory())
+            except KeyboardInterrupt:
+                raise
+            except RuntimeError as e:
+                if "BUSY stayed high" in str(e):
+                    log.warning(
+                        "scanner[%s] PN5180 BUSY timeout — RF_OFF recovery (check power/heat/wiring if this repeats)",
+                        scanner_id,
+                    )
+                    try:
+                        recover_pn5180(reader)
+                    except Exception:
+                        log.exception("PN5180 recovery failed")
+                    time.sleep(cfg.interval)
+                    continue
+                log.exception("test-mode inventory failed")
+                time.sleep(cfg.interval)
+                continue
             except Exception:
                 log.exception("test-mode inventory failed")
                 time.sleep(cfg.interval)
                 continue
+
+            log.debug(
+                "scanner[%s] poll uids=%s",
+                scanner_id,
+                ",".join(sorted(uids)) if uids else "-",
+            )
 
             if not cfg.quiet_polls:
                 if uids:
@@ -163,12 +214,19 @@ def run_test_mode(cfg: ScannerConfig, scanner_id: str, reader: Reader, tag_spell
             now = time.monotonic()
             last = last_spell_at.get(primary_uid)
             if last is not None and (now - last < cfg.spell_cooldown):
+                log.debug(
+                    "test-mode: cooldown skip uid=%s (%.1fs left)",
+                    primary_uid,
+                    cfg.spell_cooldown - (now - last),
+                )
                 time.sleep(cfg.interval)
                 continue
             if send_spell_to_slave(cfg, primary_uid, spell_name, kind="test"):
                 last_spell_at[primary_uid] = time.monotonic()
 
             time.sleep(cfg.interval)
+    except KeyboardInterrupt:
+        log.info("interrupted (Ctrl-C or SIGTERM)")
     finally:
         log.info("test-mode down")
     return 0

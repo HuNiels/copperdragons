@@ -44,6 +44,8 @@ class ScannerConfig:
     test_scanner: str | None = None
     smoke_test: bool = False
     use_mock_readers: bool = False
+    debug_logging: bool = False
+    log_file: Path | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,10 +58,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
-        "-v", "--verbose", action="store_true", help="library debug logs (SPI frames, IRQ state)"
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=(
+            "PN5180 library trace to stdout: each SPI write as 'Sent Frame' (hex bytes), "
+            "plus RX_STATUS/IRQ_STATUS after reads. Very fast/noisy; use for hardware bring-up."
+        ),
     )
     ap.add_argument(
-        "--interval", type=float, default=0.1, help="seconds between inventory polls (default 0.1)"
+        "--debug",
+        action="store_true",
+        help=(
+            "Python logging at DEBUG (every poll line, cooldown skips in test mode). "
+            "Does not enable SPI dump; add -v separately if you need wire-level trace."
+        ),
+    )
+    ap.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="append the same log lines to this file (UTF-8)",
+    )
+    ap.add_argument(
+        "--interval",
+        type=float,
+        default=0.1,
+        help="seconds between inventory polls (default 0.1); increase e.g. 0.5 to slow logs",
     )
     ap.add_argument(
         "--display-url",
@@ -87,7 +113,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help=(
             "single-scanner test mode: run only this scanner with per-tag "
-            "behavior (UID -> spell from tag_spells.json, with binding prompt)"
+            "behavior (UID -> spell from tag_spells.json, with binding prompt). "
+            "If --scanner is omitted, the scanner list defaults to this id."
         ),
     )
     ap.add_argument(
@@ -170,7 +197,11 @@ def config_from_args(args: argparse.Namespace) -> ScannerConfig:
     )
     api_key = args.api_key.strip() or None
 
+    # Test mode only runs one reader; if the user did not pass --scanner, align
+    # the implicit list with --test-scanner so `--test-scanner A` works alone.
     raw_ids = args.scanner or ["default"]
+    if args.test_scanner is not None and args.scanner is None:
+        raw_ids = [args.test_scanner]
     seen: set[str] = set()
     scanners: list[ScannerHardware] = []
     for entry in raw_ids:
@@ -198,4 +229,6 @@ def config_from_args(args: argparse.Namespace) -> ScannerConfig:
         test_scanner=args.test_scanner,
         smoke_test=args.smoke_test,
         use_mock_readers=args.mock_readers,
+        debug_logging=args.debug,
+        log_file=args.log_file,
     )

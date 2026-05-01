@@ -20,6 +20,13 @@ sys.path.insert(0, str(_REPO_ROOT / "external" / "pyPN5180"))
 from PN5180 import ISO14443  # noqa: E402
 
 
+def recover_pn5180(reader: Reader) -> None:
+    """Call PN5180 escape hatch after a BUSY timeout (ISO14443 subclasses PN5180)."""
+    fn = getattr(reader, "recover_rf_off_no_busy_wait", None)
+    if callable(fn):
+        fn()
+
+
 class Reader(Protocol):
     """Anything with an ``inventory()`` returning UID strings is a Reader."""
 
@@ -48,4 +55,18 @@ def make_reader(hw: ScannerHardware, cfg: ScannerConfig) -> Reader:
     those, this is the only place that needs to change."""
     if cfg.use_mock_readers:
         return MockReader([set()])
-    return ISO14443(debug=cfg.verbose)
+    try:
+        # Library ``debug`` prints every SPI byte and RX_STATUS to stdout (very
+        # fast/noisy). Use ``-v`` only when you need that; ``--debug`` is Python
+        # logging only (see scan.py / config).
+        return ISO14443(debug=cfg.verbose)
+    except Exception as e:
+        err = str(e).lower()
+        if "gpio busy" in err:
+            raise RuntimeError(
+                "GPIO 25 (PN5180 BUSY) is already claimed — usually because another "
+                "copy of scan.py (or any program using that pin) is still running. "
+                "Check: pgrep -af scan.py  then stop the extra process (kill PID). "
+                "Only one reader instance can use the PN5180 on this Pi."
+            ) from e
+        raise

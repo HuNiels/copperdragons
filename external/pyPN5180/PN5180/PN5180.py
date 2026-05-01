@@ -1,8 +1,6 @@
 import spidev
 import RPi.GPIO as GPIO
-from gpiozero import DigitalInputDevice
 import time
-import sys
 from abc import ABC, abstractmethod
 
 from .definitions import *
@@ -25,12 +23,31 @@ class PN5180(ABC):
 		return ' '.join(f"0x{i:02x}" for i in data)
 
 	def _wait_ready(self):
-		#self._log("Check Card Ready")
+		# BUSY is active-high while the PN5180 is processing; host must wait.
+		# If it never goes low: BUSY not wired to BCM GPIO 25 (header pin 22), bad
+		# SPI so the chip never completes, or power/enable issue.
+		deadline = time.monotonic() + 15.0
 		if GPIO.input(25):
 			while GPIO.input(25):
+				if time.monotonic() > deadline:
+					raise RuntimeError(
+						"PN5180 BUSY stayed high >15s on GPIO 25 (physical pin 22). "
+						"Check BUSY->pin 22, 3.3V logic, SPI0 CE0/MOSI/MISO/SCK, and module power."
+					)
 				self._log("Card Not Ready - Waiting for Busy Low")
-				time.sleep(.01)
-		#self._log("Card Ready, continuing conversation.")
+				time.sleep(0.01)
+
+	def recover_rf_off_no_busy_wait(self) -> None:
+		"""Best-effort recovery when BUSY stays high (thermal drift, weak supply, SPI glitch).
+
+		Sends RF_FIELD_OFF without the normal BUSY handshake — only safe as an escape
+		hatch after :meth:`_wait_ready` has already timed out (protocol may be out of sync).
+		"""
+		try:
+			self._spi.writebytes([PN5180_RF_OFF, 0x00])
+		except OSError:
+			pass
+		time.sleep(0.05)
 
 	def _send(self, frame: [bytes]):
 		self._wait_ready()
@@ -216,7 +233,8 @@ class ISO14443(PN5180):
 				uid = self._anticollision()
 				uids.append(uid)
 			except Exception as e:
-				pass
+				# Bare ``raise Exception`` in _anticollision is used for flow; log when debug.
+				self._log("ISO14443 anticollision failed:", repr(e))
 			#self._send([0x09, 0x07, 0x93, 0x20])
 			#uid_buffer = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 			#self._log(uid_buffer)
