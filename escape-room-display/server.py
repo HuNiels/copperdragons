@@ -16,6 +16,10 @@ Env (all optional):
     VALID_SPELLS        comma-separated, default: fireball,void
     USE_SUDO            1 (default on Pi) or 0 (laptop / no GPIO)
     DISPLAY_API_KEY     if set, clients must send X-API-Key with same value
+
+Spell subprocess env (see led_screen/spells/spell.py):
+    SPELL_LOOPS         how many times to loop the full frame sequence (default 5)
+    SPELL_MAX_SECONDS   wall-clock cap in seconds (default 10); stops early if reached before all loops finish
 """
 from __future__ import annotations
 
