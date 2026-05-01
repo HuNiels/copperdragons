@@ -1,8 +1,9 @@
 """
 Manage the lifecycle of a single running `spell.py` subprocess.
 
-Why subprocess: `spell.py` owns the RGB matrix. It plays once (or until
-SPELL_MAX_SECONDS), clears the panel, and exits. POST /spell still replaces any
+Why subprocess: `spell.py` owns the RGB matrix. It loops the animation SPELL_LOOPS
+times (default 5) or until SPELL_MAX_SECONDS, clears the panel, and exits. POST /spell
+still replaces any
 running spell by killing the old process first.
 """
 from __future__ import annotations

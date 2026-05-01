@@ -2,12 +2,42 @@ import argparse
 import time
 import sys
 import os
+from pathlib import Path
+
+# Vendored bindings after `make -C external/rgb-matrix build-python` — no pip needed (PEP 668 on Pi OS).
+_REPO_RGB_BINDINGS = Path(__file__).resolve().parents[2] / "external" / "rgb-matrix" / "bindings" / "python"
+if _REPO_RGB_BINDINGS.is_dir():
+    sys.path.insert(0, str(_REPO_RGB_BINDINGS))
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__) + '/..'))
 
 try:
     from rgbmatrix import RGBMatrix, RGBMatrixOptions
-except ImportError:
+except ImportError as _rgb_import_err:
+    # Only use in-memory mocks when explicitly requested (e.g. CI / dev laptop).
+    # On a Pi with a missing or broken install, failing fast avoids "nothing on screen"
+    # with no explanation.
+    _allow_mock = os.environ.get("RGB_MATRIX_USE_MOCK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if not _allow_mock:
+        sys.stderr.write(
+            "rgbmatrix import failed — hardware bindings are not available.\n"
+            "From the repo root: make -C external/rgb-matrix build-python\n"
+            "Or: pip install ./external/rgb-matrix/bindings/python (venv or pip --break-system-packages).\n"
+            "Quick check: PYTHONPATH=external/rgb-matrix/bindings/python python3 -c \"from rgbmatrix import RGBMatrix\"\n"
+            "Or set RGB_MATRIX_USE_MOCK=1 for a no-op stub.\n"
+            f"ImportError: {_rgb_import_err}\n"
+        )
+        raise
+
+    sys.stderr.write(
+        "rgbmatrix: using software mock (RGB_MATRIX_USE_MOCK is set)\n"
+    )
+
     # Mock implementations for development on systems without rgbmatrix
     class RGBMatrixOptions:
         def __init__(self):
@@ -38,6 +68,9 @@ except ImportError:
             # Mock: Do nothing
             pass
 
+        def Clear(self):
+            pass
+
     class RGBMatrix:
         def __init__(self, options):
             self.options = options
@@ -46,8 +79,8 @@ except ImportError:
             return FrameCanvas()
 
         def SwapOnVSync(self, canvas):
-            # Mock: Do nothing
-            pass
+            # Mock: return canvas so double-buffer reuse matches real rgbmatrix.
+            return canvas
 
 
 class SampleBase(object):
