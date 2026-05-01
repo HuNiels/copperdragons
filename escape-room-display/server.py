@@ -13,7 +13,9 @@ Run (on the slave):
 Env (all optional):
     SPELLS_DIR          defaults to ~/copperdragons/led_screen/spells
     VENV_PYTHON         defaults to ~/copperdragons/.venv/bin/python
-    VALID_SPELLS        comma-separated, default: fireball,void
+    VALID_SPELLS        comma-separated whitelist; if unset, names match folders in
+                        led_screen/spell-data (same as spell.py). If that dir is
+                        missing/empty, falls back to fireball,void
     USE_SUDO            1 (default on Pi) or 0 (laptop / no GPIO)
     DISPLAY_API_KEY     if set, clients must send X-API-Key with same value
 
@@ -38,11 +40,35 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 HOME = Path(os.path.expanduser("~"))
-SPELLS_DIR = Path(os.environ.get("SPELLS_DIR", HOME / "copperdragons" / "led_screen" / "spells"))
-VENV_PYTHON = Path(os.environ.get("VENV_PYTHON", HOME / "copperdragons" / ".venv" / "bin" / "python"))
-VALID_SPELLS = tuple(
-    s.strip() for s in os.environ.get("VALID_SPELLS", "fireball,void").split(",") if s.strip()
-)
+
+
+def _spells_from_spell_data(spell_data_dir: Path) -> tuple[str, ...]:
+    """Folder names under spell-data, same rule as led_screen/spells/spell.py."""
+    if not spell_data_dir.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            p.name
+            for p in spell_data_dir.iterdir()
+            if p.is_dir() and not p.name.startswith(".")
+        )
+    )
+
+
+SPELLS_DIR = Path(
+    os.environ.get("SPELLS_DIR", HOME / "copperdragons" / "led_screen" / "spells")
+).expanduser()
+VENV_PYTHON = Path(
+    os.environ.get("VENV_PYTHON", HOME / "copperdragons" / ".venv" / "bin" / "python")
+).expanduser()
+_SPELL_DATA_DIR = SPELLS_DIR.resolve().parent / "spell-data"
+_valid_env = os.environ.get("VALID_SPELLS", "").strip()
+if _valid_env:
+    VALID_SPELLS = tuple(s.strip() for s in _valid_env.split(",") if s.strip())
+else:
+    VALID_SPELLS = _spells_from_spell_data(_SPELL_DATA_DIR)
+    if not VALID_SPELLS:
+        VALID_SPELLS = ("fireball", "void")
 USE_SUDO = os.environ.get("USE_SUDO", "1") == "1"
 API_KEY = os.environ.get("DISPLAY_API_KEY", "").strip()
 

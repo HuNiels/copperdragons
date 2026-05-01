@@ -3,8 +3,7 @@ Manage the lifecycle of a single running `spell.py` subprocess.
 
 Why subprocess: `spell.py` owns the RGB matrix. It loops the animation SPELL_LOOPS
 times (default 5) or until SPELL_MAX_SECONDS, clears the panel, and exits. POST /spell
-still replaces any
-running spell by killing the old process first.
+still replaces any running spell by killing the old process first.
 """
 from __future__ import annotations
 
@@ -54,18 +53,43 @@ class SpellRunner:
             self._stop_locked()
             cmd: list[str] = []
             if self.use_sudo:
-                cmd += ["sudo", "-n"]
-            cmd += [str(self.python_exe), "spell.py", spell]
+                # -E preserves env into the sudo’d python so SPELL_*, LED_*, etc. match a manual run.
+                # Without it, sudo drops most variables and behavior can differ from the shell.
+                cmd += ["sudo", "-E", "-n"]
+            # rgbmatrix drops root by default after GPIO init; opened spell JSON lives under
+            # /home/cde/... and is unreadable after drop → PermissionError. Keep root until exit.
+            cmd += [str(self.python_exe), "spell.py", spell, "--led-no-drop-privs"]
+            mock_hint = os.environ.get("RGB_MATRIX_USE_MOCK", "").strip()
+            if mock_hint:
+                log.warning(
+                    "RGB_MATRIX_USE_MOCK=%s — spell uses no-op matrix mock (nothing on the panel)",
+                    mock_hint,
+                )
             log.info("starting spell=%s cmd=%s cwd=%s", spell, cmd, self.spells_dir)
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.spells_dir),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                # Do not discard output: ImportErrors / GPIO / rgbmatrix failures must reach journalctl or the tty.
+                stdout=None,
+                stderr=None,
                 start_new_session=True,
             )
+            proc_ref = self._proc
+            threading.Thread(
+                target=self._log_spell_exit,
+                args=(proc_ref, spell),
+                daemon=True,
+                name=f"spell-exit-{spell}",
+            ).start()
             self._current = spell
             return spell
+
+    def _log_spell_exit(self, proc: subprocess.Popen[bytes], spell: str) -> None:
+        rc = proc.wait()
+        if rc != 0:
+            log.error("spell subprocess exited with status=%s spell=%s (see stderr above)", rc, spell)
+        else:
+            log.info("spell subprocess finished spell=%s status=0", spell)
 
     def stop(self) -> bool:
         with self._lock:
