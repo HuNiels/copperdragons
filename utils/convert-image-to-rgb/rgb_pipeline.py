@@ -12,14 +12,35 @@ class Palette:
         self.rgb_to_index = {}
         self.index_to_rgb = []
 
-    def get_index(self, rgb):
+    @staticmethod
+    def _distance(c1, c2):
+        return (
+                (c1[0] - c2[0]) ** 2 +
+                (c1[1] - c2[1]) ** 2 +
+                (c1[2] - c2[2]) ** 2
+        ) ** 0.5
+
+    def get_index(self, rgb, threshold=12):
         rgb = tuple(int(x) for x in rgb)
 
-        if rgb in self.rgb_to_index:
-            return self.rgb_to_index[rgb]
+        # 1. Try to match existing colors
+        best_idx = None
+        best_dist = float("inf")
 
+        for i, existing in enumerate(self.index_to_rgb):
+            existing_rgb = (existing["r"], existing["g"], existing["b"])
+            dist = self._distance(rgb, existing_rgb)
+
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+
+        # 2. If close enough → reuse existing color
+        if best_dist <= threshold:
+            return best_idx
+
+        # 3. Otherwise create new color
         idx = len(self.index_to_rgb)
-        self.rgb_to_index[rgb] = idx
         self.index_to_rgb.append(
             {"r": rgb[0], "g": rgb[1], "b": rgb[2]}
         )
@@ -80,10 +101,10 @@ def main():
     output_dir = Path("image_output") / input_dir.name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    valid_exts = {".jpg", ".jpeg", ".png", ".gif"}
+    valid_extensions = {".jpg", ".jpeg", ".png", ".gif"}
 
     images = sorted(
-        [p for p in input_dir.rglob("*") if p.suffix.lower() in valid_exts]
+        [p for p in input_dir.rglob("*") if p.suffix.lower() in valid_extensions]
     )
 
     if not images:
