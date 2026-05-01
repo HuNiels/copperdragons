@@ -1,75 +1,46 @@
-import argparse
 import json
 from pathlib import Path
-
 from PIL import Image
 import numpy as np
 
 class ImageRGBExtractor:
-    def __init__(self, image_path):
+    def __init__(self, image_path, palette):
         self.image_path = Path(image_path)
+        self.palette = palette
         self.image = None
         self.pixel_data = []
 
     def _load_image(self):
-        img_pil = Image.open(self.image_path).convert("RGB")
+        img = Image.open(self.image_path).convert("RGB")
+        img = img.resize((32, 32), Image.Resampling.NEAREST)
+        self.image = np.array(img)
 
-        img_pil = img_pil.resize((32, 32), resample=Image.Resampling.NEAREST)
-
-        self.image = np.array(img_pil)
-
-        print(f"Resized image shape: {self.image.shape}")
-
-    @staticmethod
-    def _rgb_to_hex(pixel):
-        r, g, b = pixel[:3]
-
-        if isinstance(r, float):
-            r, g, b = int(r * 255), int(g * 255), int(b * 255)
-        else:
-            r, g, b = int(r), int(g), int(b)
-
-        return f"#{r:02x}{g:02x}{b:02x}"
-
-    def _extract_hex(self):
-        if self.image is None:
-            raise ValueError("Image not loaded. Call _load_image() first.")
-
+    def _extract_indices(self):
         for row in self.image:
             row_data = []
             for pixel in row:
-                row_data.append(self._rgb_to_hex(pixel))
+                row_data.append(self.palette.get_index(tuple(pixel)))
             self.pixel_data.append(row_data)
 
-    def _save_to_json(self):
-        output_path = self.image_path.parent / "pixel_colors.json"
-
+    def save_json(self, output_path):
         with open(output_path, "w") as f:
-            f.write("[\n")
+            f.write("{\n")
+            f.write('    "grid": [\n')
 
-            for i, row in enumerate(self.pixel_data):
-                row_str = json.dumps(row)
+            for y, row in enumerate(self.pixel_data):
+                row_str = ", ".join(str(v) for v in row)
+                line = f"        [{row_str}]"
 
-                if i < len(self.pixel_data) - 1:
-                    f.write(f"  {row_str},\n")
-                else:
-                    f.write(f"  {row_str}\n")
+                if y < len(self.pixel_data) - 1:
+                    line += ","
 
-            f.write("]\n")
+                f.write(line + "\n")
 
-        print(f"Hex color data saved to: {output_path}")
+            f.write("    ]\n")
+            f.write("}\n")
 
-    def run(self):
+    def run(self, output_path):
         self._load_image()
-        self._extract_hex()
-        self._save_to_json()
-        print(f"Extracted {len(self.pixel_data)} rows of pixels.")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Extract HEX color values from an image.")
-    parser.add_argument("image_path", help="Path to the image file (e.g. cat.jpeg)")
-    args = parser.parse_args()
-
-    extractor = ImageRGBExtractor(args.image_path)
-    extractor.run()
+        self._extract_indices()
+        self.save_json(output_path)
+        print(f"Saved: {output_path}")
