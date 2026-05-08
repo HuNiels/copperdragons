@@ -38,7 +38,10 @@ disconnected.
 | `IRQ`             | -             | -                   | leave disconnected                   |
 
 Keep the SPI wires short (<= ~15 cm) and routed away from the antenna loop.
-pyPN5180 runs SPI at 50 kHz for reliability, so cable quality is forgiving.
+pyPN5180 runs SPI at 5 MHz (PN5180 supports up to 7 MHz). If reads flake on
+long or noisy leads, lower `max_speed_hz` in
+[`external/pyPN5180/PN5180/PN5180.py`](../external/pyPN5180/PN5180/PN5180.py)
+(e.g. `1_000_000` or `500_000`).
 
 If your breakout has a single 5V input with onboard regulators, connect only
 5V + GND for supply and skip the 3V3 rail.

@@ -14,8 +14,9 @@ SCAN_DIR = Path(__file__).resolve().parents[1]
 
 @dataclass
 class ScannerHardware:
-    """Per-scanner hardware identity. SPI/BUSY fields are placeholders for a
-    future pyPN5180 patch; today's library ignores them."""
+    """Per-scanner hardware identity. SPI/BUSY are consumed once the vendored
+    ``external/pyPN5180`` code is updated to use them; until then the library
+    uses its built-in bus/device/GPIO."""
 
     scanner_id: str
     spi_bus: int = 0
@@ -84,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--interval",
         type=float,
-        default=0.1,
+        default=0.15,
         help="seconds between inventory polls (default 0.1); increase e.g. 0.5 to slow logs",
     )
     ap.add_argument(

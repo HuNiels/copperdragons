@@ -1,9 +1,9 @@
 """Reader abstraction over pyPN5180.
 
-This module owns the vendored-pyPN5180 sys.path setup and the import of
-``ISO14443``. Everything else in the framework talks only to the ``Reader``
-Protocol below; when pyPN5180 is patched/forked to support per-scanner SPI
-device + BUSY GPIO, ``make_reader`` is the only function that needs updating.
+This module prepends ``external/pyPN5180`` (vendored copy we edit in-tree) and
+imports ``ISO14443``. The rest of the framework uses only the ``Reader``
+Protocol; extend the vendored ``PN5180`` package for SPI/BUSY changes, then
+adjust ``make_reader`` if the constructor or wiring changes.
 """
 from __future__ import annotations
 
@@ -51,8 +51,8 @@ class MockReader:
 
 def make_reader(hw: ScannerHardware, cfg: ScannerConfig) -> Reader:
     """Build a Reader for the given scanner. Today this constructs ISO14443
-    ignoring ``hw.spi_*``/``hw.busy_gpio``; when pyPN5180 is patched to accept
-    those, this is the only place that needs to change."""
+    ignoring ``hw.spi_*``/``hw.busy_gpio`` (see ``external/pyPN5180`` to wire
+    those through)."""
     if cfg.use_mock_readers:
         return MockReader([set()])
     try:

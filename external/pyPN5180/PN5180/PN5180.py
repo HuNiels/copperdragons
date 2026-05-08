@@ -1,3 +1,4 @@
+import logging
 import spidev
 import RPi.GPIO as GPIO
 import time
@@ -5,11 +6,17 @@ from abc import ABC, abstractmethod
 
 from .definitions import *
 
+logger = logging.getLogger(__name__)
+
+
 class PN5180(ABC):
 	def __init__(self, bus: int = 0, device: int = 0, debug=False):
 		self._spi = spidev.SpiDev()
 		self._spi.open(bus, device)
-		self._spi.max_speed_hz = 50000
+		# PN5180 supports SPI up to 7 MHz; 5 MHz is a reliable default. If reads
+		# flake on long/dirty leads, drop to 1_000_000 or 500_000 here.
+		self._spi.max_speed_hz = 1_000_000
+		self._spi.mode = 0  # CPOL=0, CPHA=0 (PN5180 expectation)
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(25, GPIO.IN)  # GPIO 25 is the Busy pin (Header 22)
 		self.__debug = debug
@@ -56,6 +63,10 @@ class PN5180(ABC):
 		self._wait_ready()
 
 	def _read(self, length):
+		# Always wait for BUSY low before pulling bytes from the chip's read
+		# buffer; the previous response may not be ready immediately after the
+		# corresponding _send returns.
+		self._wait_ready()
 		return self._spi.readbytes(length)
 
 	def _send_string(self, string: str):
@@ -185,8 +196,12 @@ class ISO14443(PN5180):
 				self._log(f"Collision Occurred at position: {self._collision_position}")
 			else:
 				# No collision occurred
-				self._send([PN5180_WRITE_REGISTER_AND_MASK, CRC_TX_CONFIG, 0x01])  #Switches the CRC extension on in Tx direction
-				self._send([PN5180_WRITE_REGISTER_AND_MASK, CRC_RX_CONFIG, 0x01])  #Switches the CRC extension on in Rx direction
+				# WRITE_REGISTER_*_MASK frames must carry a full 4-byte mask;
+				# the original code passed a single byte and used AND_MASK,
+				# which corrupted the CRC config registers mid-anticollision.
+				# Use OR_MASK to set bit 0 (re-enable the CRC extension).
+				self._send([PN5180_WRITE_REGISTER_OR_MASK, CRC_TX_CONFIG, 0x01, 0x00, 0x00, 0x00])  # Switches the CRC extension on in Tx direction
+				self._send([PN5180_WRITE_REGISTER_OR_MASK, CRC_RX_CONFIG, 0x01, 0x00, 0x00, 0x00])  # Switches the CRC extension on in Rx direction
 				self._send([PN5180_WRITE_REGISTER_AND_MASK, SYSTEM_CONFIG, 0xF8, 0xFF, 0xFF, 0xFF])  # Sets the PN5180 into IDLE state
 				self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x03, 0x00, 0x00, 0x00])  # Activates TRANSCEIVE routine
 				self._send([PN5180_WRITE_REGISTER, IRQ_CLEAR, 0xFF, 0xFF, 0x0F, 0x00])  # Clears the interrupt register IRQ_STATUS
@@ -201,7 +216,10 @@ class ISO14443(PN5180):
 						return data[1:4] + self._anticollision(cascade_level=cascade_level+2, uid_cln=uid_cln+partial_uid)
 					else:
 						return data[:-1]
-		raise Exception
+		raise RuntimeError(
+			"ISO14443 anticollision: no SELECT response "
+			"(collision unresolved or card left field)"
+		)
 
 	def _format_uid(self, uid):
 		return super()._format_uid(uid)
@@ -232,13 +250,15 @@ class ISO14443(PN5180):
 			try:
 				uid = self._anticollision()
 				uids.append(uid)
-			except Exception as e:
-				# Bare ``raise Exception`` in _anticollision is used for flow; log when debug.
-				self._log("ISO14443 anticollision failed:", repr(e))
+			except RuntimeError as e:
+				# Anticollision can fail benignly (collision unresolved, card
+				# moved out of field). Surface at WARNING so production logs
+				# show flaky reads without needing the SPI byte trace (-v).
+				logger.warning("ISO14443 anticollision failed: %s", e)
 			#self._send([0x09, 0x07, 0x93, 0x20])
 			#uid_buffer = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 			#self._log(uid_buffer)
 
-		self._send([0x17, 0x00])  # Switch OFF RF field
+		self._send([PN5180_RF_OFF, 0x00])  # Switch OFF RF field
 		#GPIO.output(16, GPIO.HIGH)
 		return uids
