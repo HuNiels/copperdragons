@@ -7,7 +7,8 @@ from typing import TypedDict
 
 from samplebase import SampleBase
 
-MAX_SECONDS = 120
+SINGLE_SPELL_SECONDS = 30
+PLAYLIST_SPELL_SECONDS = 10
 FRAME_TIME = 0.1
 SPELL_DATA_ROOT = Path(__file__).resolve().parent.parent / "spell_data"
 
@@ -37,12 +38,11 @@ def find_valid_spells(root: Path) -> list[str]:
     )
 
 
-def pop_spell_from_argv(valid_spells: list[str]) -> str:
-    """Remove and return the first recognised spell name from sys.argv."""
-    for i, arg in enumerate(sys.argv):
-        if arg in valid_spells:
-            sys.argv.pop(i)
-            return arg
+def pop_positional_arg() -> str:
+    """Remove and return the first non-flag argument from sys.argv (if any)."""
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if not arg.startswith("-"):
+            return sys.argv.pop(i)
     return ""
 
 
@@ -72,19 +72,28 @@ def load_palette(spell_dir: Path, spell_name: str) -> list[Colour]:
 # ---------------------------------------------------------------------------
 
 class AnimateSpell(SampleBase):
-    def __init__(self, spell_name: str, *args, **kwargs):
+    def __init__(self, spell_names: list[str], *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.spell_name = spell_name
+        self.spell_names = spell_names
+        self.seconds_per_spell = SINGLE_SPELL_SECONDS if len(spell_names) == 1 else PLAYLIST_SPELL_SECONDS
 
     def run(self) -> None:
-        spell_dir = SPELL_DATA_ROOT / self.spell_name
-        palette = load_palette(spell_dir, self.spell_name)
-        frames = load_frames(spell_dir, self.spell_name)
-        self._animate(frames, palette)
-
-    def _animate(self, frames: list[Grid], palette: list[Colour]) -> None:
-        deadline = time.monotonic() + MAX_SECONDS
         canvas = self.matrix.CreateFrameCanvas()
+        for spell_name in self.spell_names:
+            spell_dir = SPELL_DATA_ROOT / spell_name
+            palette = load_palette(spell_dir, spell_name)
+            frames = load_frames(spell_dir, spell_name)
+            print(f"Playing: {spell_name}")
+            self._animate(canvas, frames, palette, self.seconds_per_spell)
+
+    def _animate(
+        self,
+        canvas,
+        frames: list[Grid],
+        palette: list[Colour],
+        max_seconds: int,
+    ) -> None:
+        deadline = time.monotonic() + max_seconds
 
         try:
             while time.monotonic() < deadline:
@@ -112,13 +121,21 @@ class AnimateSpell(SampleBase):
 # ---------------------------------------------------------------------------
 
 valid_spells = find_valid_spells(SPELL_DATA_ROOT)
-spell_name = pop_spell_from_argv(valid_spells)
+spell_arg = pop_positional_arg()
 
-if not spell_name:
-    print(f"No valid spell selected. Choose one of: {valid_spells}")
-    sys.exit(1)
+if spell_arg:
+    if spell_arg not in valid_spells:
+        print(f"Unknown spell '{spell_arg}'. Choose one of: {valid_spells}")
+        sys.exit(1)
+    spell_names = [spell_arg]
+else:
+    if not valid_spells:
+        print("No spells found in spell_data directory.")
+        sys.exit(1)
+    print(f"No spell specified — playing all {len(valid_spells)} spells ({PLAYLIST_SPELL_SECONDS}s each).")
+    spell_names = valid_spells
 
 if __name__ == "__main__":
-    spell = AnimateSpell(spell_name)
+    spell = AnimateSpell(spell_names)
     if not spell.process():
-        spell.print_help() # type: ignore
+        spell.print_help()  # type: ignore
