@@ -24,13 +24,18 @@ class PN5180(ABC):
 	def _log_format_hex(data: [bytes]):
 		return ' '.join(f"0x{i:02x}" for i in data)
 
-	def _wait_ready(self):
-		#self._log("Check Card Ready")
-		if GPIO.input(25):
-			while GPIO.input(25):
-				self._log("Card Not Ready - Waiting for Busy Low")
-				time.sleep(.01)
-		#self._log("Card Ready, continuing conversation.")
+	def _wait_ready(self, timeout=1.0):
+		"""
+		Wait for the BUSY line (GPIO25) to go low, indicating the chip is
+		ready for the next SPI transaction. Raises TimeoutError instead of
+		hanging forever if the chip never reports ready - this surfaces SPI
+		framing / chip-state problems instead of silently freezing.
+		"""
+		start = time.time()
+		while GPIO.input(25):
+			if time.time() - start > timeout:
+				raise TimeoutError("PN5180 busy line stuck high - chip not responding")
+			time.sleep(.01)
 
 	def _send(self, frame: [bytes]):
 		self._wait_ready()
@@ -53,6 +58,13 @@ class PN5180(ABC):
 		The function CardHasResponded reads the RX_STATUS register, which indicates if a card has responded or not.
 		Bits 0-8 of the RX_STATUS register indicate how many bytes where received.
 		If this value is higher than 0, a Card has responded.
+
+		Also checks RX_SOF_DET (bit 14 of IRQ_STATUS, confirmed against the
+		ATrappmann reference library's own debug output - not guessed), which
+		flags that the chip detected a start-of-frame on the RF receive path.
+		This is tracked as a supplementary signal to see whether it ever
+		catches a response that the RX_STATUS byte-count check misses, or
+		vice versa - logged for comparison rather than silently substituted.
 		:return:
 		"""
 		self._send([PN5180_READ_REGISTER, RX_STATUS])  # READ_REGISTER RX_STATUS -> Response > 0 -> Card has responded
@@ -65,7 +77,32 @@ class PN5180(ABC):
 		collision_position = int.from_bytes(result, byteorder='little', signed=False) >> 19 & 0x3f
 		self._collision_flag = collision_bit
 		self._collision_position = collision_position
-		if result[0] > 0:
+
+		irq_value = int.from_bytes(result_irq, byteorder='little', signed=False)
+		rx_sof_det = bool(irq_value & (1 << 14))
+		rx_status_says_response = result[0] > 0
+
+		# Track disagreements between the two signals across the whole
+		# inventory round, surfaced in the round summary print - this is
+		# the actual experiment: does RX_SOF_DET ever fire when RX_STATUS
+		# byte count doesn't, or vice versa?
+		if rx_sof_det != rx_status_says_response:
+			self._sof_rxstatus_mismatches.append(
+				(rx_sof_det, rx_status_says_response, result[0])
+			)
+
+		# Confirmed real case: RX_SOF_DET fires (chip heard the tag start
+		# transmitting) but RX_STATUS still reads 0 bytes - the byte count
+		# register likely hasn't latched the completed reception yet. Give
+		# it a brief moment and re-read once before giving up on this slot.
+		if rx_sof_det and not rx_status_says_response:
+			time.sleep(0.0005)
+			self._send([PN5180_READ_REGISTER, RX_STATUS])
+			result = self._read(4)
+			self._log("Re-read RX_STATUS after SOF-only:", self._log_format_hex(result))
+			rx_status_says_response = result[0] > 0
+
+		if rx_status_says_response:
 			self._bytes_in_card_buffer = result[0]
 			return True
 		return False
@@ -119,10 +156,27 @@ class ISO15693(PN5180):
 		Return UID when detected
 		:return:
 		"""
+		round_start = time.time()
 		uids = []
+		slot_responses = []  # (slot_index, byte_count) for every slot that had RX_STATUS > 0, regardless of whether we kept it
+		self._sof_rxstatus_mismatches = []  # (rx_sof_det, rx_status_says_response, byte_count) wherever the two signals disagreed
 		# https://www.nxp.com/docs/en/application-note/AN12650.pdf
 		self._send([PN5180_LOAD_RF_CONFIG, 0x0D, 0x8D])  # Loads the ISO 15693 protocol into the RF registers
-		self._send([PN5180_RF_ON, 0x00])  # Switches the RF field ON.
+
+		# --- Field-bounce fix ---
+		# ISO15693 tags latch into a "quiet" state once they've answered an
+		# inventory round, and will not respond again until they lose power
+		# or receive a Reset-to-Ready command. Forcing the RF field off
+		# briefly before turning it back on power-cycles any tag in the
+		# field, clearing the quiet flag the same way physically lifting
+		# the tag does. This is the version that was confirmed working
+		# (no lockup, no phantom UIDs, no missed reads) before later
+		# changes were layered on top - reverting here to isolate causes.
+		self._send([PN5180_RF_OFF, 0x00])    # Switch RF field OFF (power-cycle any tag present)
+		time.sleep(0.01)                     # Let tag fully discharge/reset
+		self._send([PN5180_RF_ON, 0x00])     # Switch RF field back ON.
+		# --- end field-bounce fix ---
+
 		self._send([PN5180_WRITE_REGISTER, IRQ_CLEAR, 0xFF, 0xFF, 0x0F, 0x00])  # Clears the interrupt register IRQ_STATUS
 		self._send([PN5180_WRITE_REGISTER_AND_MASK, SYSTEM_CONFIG, 0xF8, 0xFF, 0xFF, 0xFF])  # Sets the PN5180 into IDLE state
 		self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x03, 0x00, 0x00, 0x00])  # Activates TRANSCEIVE routine
@@ -130,13 +184,20 @@ class ISO15693(PN5180):
 
 		for slot_counter in range(0, 16):  # A loop that repeats 16 times since an inventory command consists of 16 time slots
 			if self._card_has_responded():  # The function CardHasResponded reads the RX_STATUS register, which indicates if a card has responded or not.
+				slot_responses.append((slot_counter, self._bytes_in_card_buffer))
 				#GPIO.output(16, GPIO.LOW)
 				self._send([PN5180_READ_DATA, 0x00])  # Command READ_DATA - Reads the reception Buffer
 				uid_buffer = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 				# uid_buffer = self._read(255)  # We shall read the buffer from SPI MISO
 				self._log("Buffer:", self._log_format_hex(uid_buffer))
-				# uid = uid_buffer[0:10]
-				uids.append(uid_buffer)
+				# A real ISO15693 inventory reply is flags(1) + UID(8) [+ CRC(2)
+				# if CRC isn't stripped by the chip] = at least 9 bytes. A
+				# 1-byte buffer is leftover noise/register glitch, not a tag.
+				if self._bytes_in_card_buffer >= 9:
+					# uid = uid_buffer[0:10]
+					uids.append(uid_buffer)
+				else:
+					self._log("Discarding implausibly short response:", self._log_format_hex(uid_buffer))
 			self._send([0x02, 0x18, 0x3F, 0xFB, 0xFF, 0xFF])  # Send only EOF (End of Frame) without data at the next RF communication.
 			self._send([PN5180_WRITE_REGISTER_AND_MASK, SYSTEM_CONFIG, 0xF8, 0xFF, 0xFF, 0xFF])  # Sets the PN5180 into IDLE state
 			self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x03, 0x00, 0x00, 0x00])  # Activates TRANSCEIVE routine
@@ -144,6 +205,14 @@ class ISO15693(PN5180):
 			self._send([PN5180_SEND_DATA, 0x00])  # Send EOF
 		self._send([PN5180_RF_OFF, 0x00])  # Switch OFF RF field
 		#GPIO.output(16, GPIO.HIGH)
+
+		# Always-on compact summary (not gated by debug=) - one line per
+		# poll, independent of the noisy per-SPI-frame debug log, so the
+		# round duration and which slot(s) actually saw a response can be
+		# read directly without wading through hundreds of frame dumps.
+		round_duration_ms = (time.time() - round_start) * 1000
+		print(f"[inventory] duration={round_duration_ms:.1f}ms slot_responses={slot_responses} kept={len(uids)} sof_mismatches={self._sof_rxstatus_mismatches}")
+
 		return uids
 		
 
