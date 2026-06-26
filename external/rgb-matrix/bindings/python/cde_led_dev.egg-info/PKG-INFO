@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: cde-led-dev
-Version: 0.1.0
-Summary: LED matrix helpers for Copper Dragons
-Author: Christoph Friedrich
-Author-email: christoph.friedrich@vonaffenfels.de
-Requires-Python: >=3.10
-Dynamic: author
-Dynamic: author-email

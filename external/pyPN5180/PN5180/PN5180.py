@@ -1,8 +1,6 @@
 import spidev
 import RPi.GPIO as GPIO
-from gpiozero import DigitalInputDevice
 import time
-import sys
 from abc import ABC, abstractmethod
 
 from .definitions import *
@@ -285,7 +283,8 @@ class ISO14443(PN5180):
 				uid = self._anticollision()
 				uids.append(uid)
 			except Exception as e:
-				pass
+				# Bare ``raise Exception`` in _anticollision is used for flow; log when debug.
+				self._log("ISO14443 anticollision failed:", repr(e))
 			#self._send([0x09, 0x07, 0x93, 0x20])
 			#uid_buffer = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 			#self._log(uid_buffer)

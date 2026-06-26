@@ -6,10 +6,10 @@
 # for python3: make PYTHON=$(which python3) CYTHON=$(which cython3)
 CYTHON ?= cython3
 
-all : core.cpp graphics.cpp
+all : core.cpp
 
 %.cpp : %.pyx
 	$(CYTHON) --cplus -o $@ $^
 
 clean:
-	rm -rf core.cpp graphics.cpp
+	rm -rf core.cpp

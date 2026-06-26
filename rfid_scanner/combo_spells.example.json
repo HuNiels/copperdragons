@@ -1,0 +1,4 @@
+[
+  { "match": { "A": "fire", "B": "ice"  }, "spell": "void"      },
+  { "match": { "A": "ice",  "B": "fire" }, "spell": "fireblast" }
+]
