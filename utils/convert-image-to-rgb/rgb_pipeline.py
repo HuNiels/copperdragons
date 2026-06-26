@@ -114,17 +114,14 @@ def main():
 
     frame_data = []
 
-    # 1. Extract all frames
+    dataset_name = input_dir.name
+
     for img in images:
-        out_json = output_dir / f"{img.stem}.json"
+        match = re.search(r"frame_(\d+)", img.stem)
+        frame_number = str(int(match.group(1))) if match else img.stem
+        out_json = output_dir / f"{dataset_name}-frame_{frame_number}.json"
         run_extractor(img, out_json, palette)
         frame_data.append((img.stem, out_json))
-
-    # 2. Derive dataset name from first frame (x-frame_0 → x)
-    first_stem = images[0].stem
-
-    match = re.match(r"(.+)-frame_\d+", first_stem)
-    dataset_name = match.group(1) if match else first_stem
 
     palette_path = output_dir / f"{dataset_name}-colours.json"
     palette.save(palette_path)
