@@ -1,0 +1,16 @@
+---
+description: Copperdragons escape room puzzle — architecture and common AI pitfalls
+alwaysApply: true
+---
+
+# Copperdragons context
+
+Table puzzle: PN5180 readers (POC: 2, prod: ~3) on **one scanner Pi** detect NFC-tagged elements; combo match → POST spell to display Pi → **32×32 HAT** animation.
+
+- **Separate Pis:** scanner (`copperdragons3`) + display (`raspberrypi`). Readers colocated on same table → prefer 1 Pi for all readers (blocked on pyPN5180 multi-device).
+- **Config:** UID → **element** → combo → **spell** (target). **Now:** test mode — UID → spell via `--test-scanner`.
+- **Idle:** no default animation; spell finishes → blank panel. Physical spellbook in room is analog, not software.
+- **Spells today:** LED animations only. Room effects (clothing drop, etc.) are future/out of scope.
+- **Paths:** `led_screen/spell_runner/animate_spell.py`, `led_screen/spell_data/` (older docs may differ).
+
+Full context: [AGENTS.md](../../AGENTS.md) and [docs/PROJECT.md](../../docs/PROJECT.md).
