@@ -11,15 +11,17 @@ Run (on the slave):
     uvicorn server:app --host 0.0.0.0 --port 8765
 
 Env (all optional):
-    SPELLS_DIR          defaults to ~/copperdragons/led_screen/spells
+    SPELL_RUNNER_DIR    cwd for animate_spell.py (default ~/copperdragons/led_screen/spell_runner)
+    SPELL_DATA_DIR      frame JSON folders for spell whitelist (default .../spell_data)
+    SPELLS_DIR          legacy alias for SPELL_RUNNER_DIR
     VENV_PYTHON         defaults to ~/copperdragons/.venv/bin/python
     VALID_SPELLS        comma-separated whitelist; if unset, names match folders in
-                        led_screen/spell-data (same as spell.py). If that dir is
-                        missing/empty, falls back to fireball,void
+                        SPELL_DATA_DIR (same as animate_spell.py). If missing/empty,
+                        falls back to fireball,void
     USE_SUDO            1 (default on Pi) or 0 (laptop / no GPIO)
     DISPLAY_API_KEY     if set, clients must send X-API-Key with same value
 
-Spell subprocess env (see led_screen/spells/spell.py):
+Spell subprocess env (see led_screen/spell_runner/animate_spell.py):
     SPELL_LOOPS         how many times to loop the full frame sequence (default 5)
     SPELL_MAX_SECONDS   wall-clock cap in seconds (default 10); stops early if reached before all loops finish
 """
@@ -43,7 +45,7 @@ HOME = Path(os.path.expanduser("~"))
 
 
 def _spells_from_spell_data(spell_data_dir: Path) -> tuple[str, ...]:
-    """Folder names under spell-data, same rule as led_screen/spells/spell.py."""
+    """Folder names under spell-data, same rule as led_screen/spell_data/spell.py."""
     if not spell_data_dir.is_dir():
         return ()
     return tuple(
@@ -55,25 +57,31 @@ def _spells_from_spell_data(spell_data_dir: Path) -> tuple[str, ...]:
     )
 
 
-SPELLS_DIR = Path(
-    os.environ.get("SPELLS_DIR", HOME / "copperdragons" / "led_screen" / "spells")
+_LED_SCREEN = HOME / "copperdragons" / "led_screen"
+SPELL_RUNNER_DIR = Path(
+    os.environ.get(
+        "SPELL_RUNNER_DIR",
+        os.environ.get("SPELLS_DIR", _LED_SCREEN / "spell_runner"),
+    )
+).expanduser()
+SPELL_DATA_DIR = Path(
+    os.environ.get("SPELL_DATA_DIR", _LED_SCREEN / "spell_data")
 ).expanduser()
 VENV_PYTHON = Path(
     os.environ.get("VENV_PYTHON", HOME / "copperdragons" / ".venv" / "bin" / "python")
 ).expanduser()
-_SPELL_DATA_DIR = SPELLS_DIR.resolve().parent / "spell-data"
 _valid_env = os.environ.get("VALID_SPELLS", "").strip()
 if _valid_env:
     VALID_SPELLS = tuple(s.strip() for s in _valid_env.split(",") if s.strip())
 else:
-    VALID_SPELLS = _spells_from_spell_data(_SPELL_DATA_DIR)
+    VALID_SPELLS = _spells_from_spell_data(SPELL_DATA_DIR.resolve())
     if not VALID_SPELLS:
         VALID_SPELLS = ("fireball", "void")
 USE_SUDO = os.environ.get("USE_SUDO", "1") == "1"
 API_KEY = os.environ.get("DISPLAY_API_KEY", "").strip()
 
 runner = SpellRunner(
-    spells_dir=SPELLS_DIR,
+    spells_dir=SPELL_RUNNER_DIR,
     python_exe=VENV_PYTHON,
     valid_spells=VALID_SPELLS,
     use_sudo=USE_SUDO,
@@ -83,8 +91,13 @@ runner = SpellRunner(
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     log.info(
-        "display server up: spells_dir=%s python=%s valid=%s sudo=%s api_key=%s",
-        SPELLS_DIR, VENV_PYTHON, VALID_SPELLS, USE_SUDO, "set" if API_KEY else "not set",
+        "display server up: runner_dir=%s spell_data=%s python=%s valid=%s sudo=%s api_key=%s",
+        SPELL_RUNNER_DIR,
+        SPELL_DATA_DIR,
+        VENV_PYTHON,
+        VALID_SPELLS,
+        USE_SUDO,
+        "set" if API_KEY else "not set",
     )
     try:
         yield
@@ -116,7 +129,7 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.get("/spells")
+@app.get("/spell_data")
 def spells() -> dict[str, Any]:
     return {"spells": runner.list_spells()}
 
@@ -136,6 +149,8 @@ def start_spell(
         current = runner.start(body.spell)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return {"ok": True, "current": current}
 
 

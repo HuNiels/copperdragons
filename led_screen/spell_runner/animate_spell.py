@@ -7,7 +7,7 @@ from typing import TypedDict
 
 from samplebase import SampleBase
 
-SINGLE_SPELL_SECONDS = 30
+SINGLE_SPELL_SECONDS = 5
 PLAYLIST_SPELL_SECONDS = 5
 FRAME_TIME = 0.1
 SPELL_DATA_ROOT = Path(__file__).resolve().parent.parent / "spell_data"

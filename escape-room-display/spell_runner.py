@@ -58,7 +58,7 @@ class SpellRunner:
                 cmd += ["sudo", "-E", "-n"]
             # rgbmatrix drops root by default after GPIO init; opened spell JSON lives under
             # /home/cde/... and is unreadable after drop → PermissionError. Keep root until exit.
-            cmd += [str(self.python_exe), "spell.py", spell, "--led-no-drop-privs"]
+            cmd += [str(self.python_exe), "animate_spell.py", spell, "--led-no-drop-privs"]
             mock_hint = os.environ.get("RGB_MATRIX_USE_MOCK", "").strip()
             if mock_hint:
                 log.warning(
