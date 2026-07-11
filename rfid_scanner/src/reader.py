@@ -1,7 +1,7 @@
 """Reader abstraction over pyPN5180.
 
 This module owns the vendored-pyPN5180 sys.path setup and the import of
-``ISO14443``. Everything else in the framework talks only to the ``Reader``
+``ISO14443`` / ``ISO15693``. Everything else in the framework talks only to the ``Reader``
 Protocol below; when pyPN5180 is patched/forked to support per-scanner SPI
 device + BUSY GPIO, ``make_reader`` is the only function that needs updating.
 """
@@ -17,7 +17,7 @@ from config import ScannerConfig, ScannerHardware
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "external" / "pyPN5180"))
 
-from PN5180 import ISO14443  # noqa: E402
+from PN5180 import ISO14443, ISO15693  # noqa: E402
 
 
 def recover_pn5180(reader: Reader) -> None:
@@ -50,16 +50,17 @@ class MockReader:
 
 
 def make_reader(hw: ScannerHardware, cfg: ScannerConfig) -> Reader:
-    """Build a Reader for the given scanner. Today this constructs ISO14443
-    ignoring ``hw.spi_*``/``hw.busy_gpio``; when pyPN5180 is patched to accept
-    those, this is the only place that needs to change."""
+    """Build a Reader for the given scanner. Today this constructs ISO14443 or
+    ISO15693 per ``cfg.protocol``, ignoring ``hw.spi_*``/``hw.busy_gpio``; when
+    pyPN5180 is patched to accept those, this is the only place that needs to change."""
     if cfg.use_mock_readers:
         return MockReader([set()])
+    reader_cls = ISO15693 if cfg.protocol == "15693" else ISO14443
     try:
         # Library ``debug`` prints every SPI byte and RX_STATUS to stdout (very
         # fast/noisy). Use ``-v`` only when you need that; ``--debug`` is Python
         # logging only (see scan.py / config).
-        return ISO14443(debug=cfg.verbose)
+        return reader_cls(debug=cfg.verbose)
     except Exception as e:
         err = str(e).lower()
         if "gpio busy" in err:

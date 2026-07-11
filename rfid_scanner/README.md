@@ -20,9 +20,8 @@ Uses [fservida/pyPN5180](https://github.com/fservida/pyPN5180), vendored at
 
 ## 1. Wiring (PN5180 module -> Raspberry Pi 4)
 
-The library hard-codes SPI bus 0 / device 0 (`CE0`) and BUSY on BCM `GPIO 25`.
-RESET and IRQ are not driven in software, so tie `RST` high and leave `IRQ`
-disconnected.
+The library hard-codes SPI bus 0 / device 0 (`CE0`), BUSY on BCM `GPIO 25`, and
+RST on BCM `GPIO 5` (header pin 29). Leave `IRQ` disconnected.
 
 | PN5180 pin        | Pi header pin | Pi signal           | Notes                                |
 | ----------------- | ------------- | ------------------- | ------------------------------------ |
@@ -34,7 +33,7 @@ disconnected.
 | `SCK`             | 23            | GPIO 11 (SPI0_SCLK) |                                      |
 | `NSS` / `SS`      | 24            | GPIO 8  (SPI0_CE0)  |                                      |
 | `BUSY`            | 22            | GPIO 25             | hard-coded in the library            |
-| `RST`             | 17            | 3V3 (tie high)      | or a free GPIO if you want SW reset  |
+| `RST`             | 29            | GPIO 5              | active-low reset; also SPI0 CE1 (unused — we use CE0 only) |
 | `IRQ`             | -             | -                   | leave disconnected                   |
 
 Keep the SPI wires short (<= ~15 cm) and routed away from the antenna loop.
@@ -89,6 +88,7 @@ python rfid_scanner/src/scan.py                      # one scanner named "defaul
 python rfid_scanner/src/scan.py -v                   # plus library SPI/IRQ trace
 python rfid_scanner/src/scan.py --scanner A,B        # two scanners "A" and "B", combo mode
 python rfid_scanner/src/scan.py --test-scanner A     # single scanner "A" in test mode
+python rfid_scanner/src/scan.py --test-scanner A --protocol 15693  # ISO 15693 tags (UID byte order differs)
 python rfid_scanner/src/scan.py --smoke-test         # in-process MockReader self-check, then exit
 ```
 
@@ -136,6 +136,13 @@ Two JSON files drive the framework:
 The controller fires once per state transition (no spamming while the state
 is held) and respects `--spell-cooldown` per combo.
 
+### RFID protocol
+
+``--protocol 14443`` (default) or ``--protocol 15693`` selects which pyPN5180
+reader class to use. ISO 15693 UIDs are byte-reversed in the library, so
+``tag_spells.json`` entries from 14443 testing will not match the same physical
+tag under 15693 — re-scan and bind UIDs when switching.
+
 ### Test mode (single scanner)
 
 `--test-scanner ID` runs only that scanner with the legacy per-tag behavior:
@@ -180,7 +187,6 @@ Use this to validate one PN5180 at a time without touching combo logic.
   hard-codes SPI bus/device and BUSY GPIO. Until the vendored library is
   patched to accept those as constructor args, multi-PN5180 hardware is not
   supported. Use `--mock-readers` for software-side testing in the meantime.
-- Software reset of the PN5180 (would need `RST` on a GPIO and a pulse via
-  `gpiozero.DigitalOutputDevice` before constructing the reader).
+- Per-scanner RST GPIO (today hard-coded to GPIO 5 like BUSY on GPIO 25).
 - Auto-start on boot. If you want that, copy the pattern from
   [`../escape-room-display/escape-room-display.service`](../escape-room-display/escape-room-display.service).

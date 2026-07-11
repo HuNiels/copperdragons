@@ -106,7 +106,7 @@ def handle_unknown_tag(
     path: Path,
     bind_timeout: float,
     no_bind_prompt: bool,
-    default_spell: str,
+    default_spell: str | None,
     binding_prompted: set[str],
 ) -> None:
     """Test-mode UX: on a TTY, prompt once to bind a new UID and persist it."""
@@ -123,7 +123,10 @@ def handle_unknown_tag(
     log.info("unknown tag %s — waiting up to %ss for spell name", uid, bind_timeout)
     chosen = prompt_new_tag_spell(uid, bind_timeout)
     if not chosen:
-        log.info("no binding saved for %s; using default spell %s", uid, default_spell)
+        if default_spell is not None:
+            log.info("no binding saved for %s; using default spell %s", uid, default_spell)
+        else:
+            log.info("no binding saved for %s; ignoring tag", uid)
         return
     tag_spells[uid] = chosen
     try:

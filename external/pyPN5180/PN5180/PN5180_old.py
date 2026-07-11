@@ -7,6 +7,7 @@ from .definitions import *
 
 # BCM GPIO 5 = physical header pin 29. Also SPI0 CE1; safe here because we use CE0 only.
 RST_GPIO = 5
+IDLE_IRQ_STAT = 0x04  # IRQ_STATUS bit 2 (ATrappmann PN5180.h)
 
 class PN5180(ABC):
 	def __init__(self, bus: int = 0, device: int = 0, debug=False):
@@ -16,9 +17,84 @@ class PN5180(ABC):
 		GPIO.setmode(GPIO.BCM)
 		GPIO.setup(25, GPIO.IN)  # GPIO 25 is the Busy pin (Header 22)
 		GPIO.setup(RST_GPIO, GPIO.OUT)
-		GPIO.output(RST_GPIO, GPIO.HIGH)  # RESET is active-low; hold high for normal operation
+		GPIO.output(RST_GPIO, GPIO.HIGH)  # RST_N inactive (active low)
 		self.__debug = debug
 		self._sof_rxstatus_mismatches = []
+		self._recovery_failures = 0
+
+	def _read_system_status(self) -> int:
+		"""Read SYSTEM_STATUS register; returns 0 if the chip is not responding."""
+		try:
+			self._send([PN5180_READ_REGISTER, SYSTEM_STATUS])
+			return int.from_bytes(self._read(4), byteorder='little')
+		except TimeoutError:
+			return 0
+
+	def _hardware_reset_pulse(self) -> None:
+		"""Pulse RST_N low (GPIO 5 / header pin 29), per ATrappmann PN5180::reset()."""
+		GPIO.output(RST_GPIO, GPIO.LOW)
+		time.sleep(0.01)
+		GPIO.output(RST_GPIO, GPIO.HIGH)
+		time.sleep(0.01)
+
+	def _wait_idle_irq(self, timeout: float = 1.0) -> bool:
+		"""Wait for IDLE_IRQ_STAT after hardware reset (best-effort)."""
+		start = time.time()
+		while time.time() - start < timeout:
+			try:
+				self._wait_ready(timeout=0.2)
+				self._send([PN5180_READ_REGISTER, IRQ_STATUS])
+				irq = int.from_bytes(self._read(4), byteorder='little')
+				if irq & IDLE_IRQ_STAT:
+					self._send([PN5180_WRITE_REGISTER, IRQ_CLEAR, 0xFF, 0xFF, 0xFF, 0xFF])
+					return True
+			except TimeoutError:
+				pass
+			time.sleep(0.01)
+		return False
+
+	def _soft_reset(self) -> bool:
+		"""SYSTEM_CONFIG bit 8 (SOFT_RESET). Secondary fallback after hardware RST."""
+		try:
+			self._wait_ready(timeout=0.2)
+		except TimeoutError:
+			pass
+		try:
+			self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x00, 0x01, 0x00, 0x00])
+		except TimeoutError:
+			return False
+		time.sleep(0.05)
+		try:
+			self._wait_ready(timeout=1.0)
+		except TimeoutError:
+			return False
+		return self._read_system_status() != 0
+
+	def _chip_reset(self) -> bool:
+		"""
+		Recover from SYSTEM_STATUS=0: hardware RST pulse on GPIO 5 first,
+		then SOFT_RESET via SPI if the chip still does not respond.
+		"""
+		print("[RESET] SYSTEM_STATUS=0 — hardware RST pulse on GPIO 5 (header pin 29)")
+		self._hardware_reset_pulse()
+		start = time.time()
+		while GPIO.input(25) and time.time() - start < 1.0:
+			time.sleep(0.01)
+		self._wait_idle_irq()
+		sys_status = self._read_system_status()
+		if sys_status == 0:
+			print("[RESET] hardware RST did not recover — trying SOFT_RESET (SYSTEM_CONFIG bit 8)")
+			if not self._soft_reset():
+				self._recovery_failures += 1
+				if self._recovery_failures <= 3:
+					print("[RESET] FAILED — SYSTEM_STATUS still 0 after hardware + soft reset")
+				elif self._recovery_failures == 4:
+					print("[RESET] giving up — check RST wiring on GPIO 5 / header pin 29, or power-cycle")
+				return False
+			sys_status = self._read_system_status()
+		print(f"[RESET] OK — SYSTEM_STATUS=0x{sys_status:08x}")
+		self._recovery_failures = 0
+		return True
 
 	def _log(self, *args):
 		if self.__debug:
@@ -38,24 +114,14 @@ class PN5180(ABC):
 		start = time.time()
 		while GPIO.input(25):
 			if time.time() - start > timeout:
+				# Print before raising so we can confirm this is actually
+				# the trigger for the "suddenly fast and empty" state.
+				# When BUSY gets stuck, the chip is mid-operation and any
+				# subsequent script run finds it in an undefined state -
+				# which matches the "requires full power cycle to fix" symptom.
 				print(f"[TIMEOUT] BUSY line stuck high for {timeout}s - chip in undefined state, requires power cycle")
 				raise TimeoutError("PN5180 busy line stuck high - chip not responding")
 			time.sleep(.01)
-
-	def _chip_reset(self):
-		"""
-		Perform a hardware reset of the PN5180 via the RESET pin (BCM GPIO 5,
-		physical pin 29). RESET is active-low: pull low briefly then release.
-		Used to recover from the SYSTEM_STATUS=0 fault state where the chip's
-		RF output has shut down internally.
-		After reset the chip needs ~2ms to reinitialise before accepting
-		further SPI commands.
-		"""
-		print(f"[RESET] SYSTEM_STATUS=0 detected - performing hardware reset via GPIO {RST_GPIO}")
-		GPIO.output(RST_GPIO, GPIO.LOW)   # Assert reset (active low)
-		time.sleep(0.001)          # Hold for 1ms - well above minimum reset pulse width
-		GPIO.output(RST_GPIO, GPIO.HIGH)  # Release reset
-		time.sleep(0.002)          # 2ms for chip to reinitialise
 
 	def _send(self, frame: [bytes]):
 		self._wait_ready()
@@ -73,16 +139,18 @@ class PN5180(ABC):
 	def _write_register(self, address, content):
 		self._send([0x00, address] + list(content))
 
-	def _card_has_responded(self, sof_retry=True):
+	def _card_has_responded(self):
 		"""
 		The function CardHasResponded reads the RX_STATUS register, which indicates if a card has responded or not.
 		Bits 0-8 of the RX_STATUS register indicate how many bytes where received.
 		If this value is higher than 0, a Card has responded.
 
-		``sof_retry`` enables ISO15693-only experimentation: when RX_SOF_DET (bit 14
-		of IRQ_STATUS) fires before RX_STATUS byte count latches, poll RX_STATUS
-		briefly. ISO14443 passes ``sof_retry=False`` — the SOF path caused false
-		negatives on REQA/anticollision (SOF set, 0 bytes, 0.5ms retry too short).
+		Also checks RX_SOF_DET (bit 14 of IRQ_STATUS, confirmed against the
+		ATrappmann reference library's own debug output - not guessed), which
+		flags that the chip detected a start-of-frame on the RF receive path.
+		This is tracked as a supplementary signal to see whether it ever
+		catches a response that the RX_STATUS byte-count check misses, or
+		vice versa - logged for comparison rather than silently substituted.
 		:return:
 		"""
 		self._send([PN5180_READ_REGISTER, RX_STATUS])  # READ_REGISTER RX_STATUS -> Response > 0 -> Card has responded
@@ -97,31 +165,28 @@ class PN5180(ABC):
 		self._collision_position = collision_position
 
 		irq_value = int.from_bytes(result_irq, byteorder='little', signed=False)
-		rx_sof_det = bool(irq_value & (1 << 14)) if sof_retry else False
+		rx_sof_det = bool(irq_value & (1 << 14))
 		rx_status_says_response = result[0] > 0
 
-		if sof_retry:
-			# Track disagreements between the two signals across the whole
-			# inventory round, surfaced in the round summary print - this is
-			# the actual experiment: does RX_SOF_DET ever fire when RX_STATUS
-			# byte count doesn't, or vice versa?
-			if rx_sof_det != rx_status_says_response:
-				self._sof_rxstatus_mismatches.append(
-					(rx_sof_det, rx_status_says_response, result[0])
-				)
+		# Track disagreements between the two signals across the whole
+		# inventory round, surfaced in the round summary print - this is
+		# the actual experiment: does RX_SOF_DET ever fire when RX_STATUS
+		# byte count doesn't, or vice versa?
+		if rx_sof_det != rx_status_says_response:
+			self._sof_rxstatus_mismatches.append(
+				(rx_sof_det, rx_status_says_response, result[0])
+			)
 
-			# Confirmed real case on ISO15693: RX_SOF_DET fires but RX_STATUS
-			# still reads 0 bytes — poll until byte count latches or timeout.
-			if rx_sof_det and not rx_status_says_response:
-				deadline = time.time() + 0.005
-				while time.time() < deadline:
-					time.sleep(0.0005)
-					self._send([PN5180_READ_REGISTER, RX_STATUS])
-					result = self._read(4)
-					self._log("Re-read RX_STATUS after SOF-only:", self._log_format_hex(result))
-					rx_status_says_response = result[0] > 0
-					if rx_status_says_response:
-						break
+		# Confirmed real case: RX_SOF_DET fires (chip heard the tag start
+		# transmitting) but RX_STATUS still reads 0 bytes - the byte count
+		# register likely hasn't latched the completed reception yet. Give
+		# it a brief moment and re-read once before giving up on this slot.
+		if rx_sof_det and not rx_status_says_response:
+			time.sleep(0.0005)
+			self._send([PN5180_READ_REGISTER, RX_STATUS])
+			result = self._read(4)
+			self._log("Re-read RX_STATUS after SOF-only:", self._log_format_hex(result))
+			rx_status_says_response = result[0] > 0
 
 		if rx_status_says_response:
 			self._bytes_in_card_buffer = result[0]
@@ -180,7 +245,7 @@ class ISO15693(PN5180):
 		round_start = time.time()
 		uids = []
 		slot_responses = []  # (slot_index, byte_count) for every slot that had RX_STATUS > 0, regardless of whether we kept it
-		self._sof_rxstatus_mismatches = []  # reset per round
+		self._sof_rxstatus_mismatches = []  # (rx_sof_det, rx_status_says_response, byte_count) wherever the two signals disagreed
 		# https://www.nxp.com/docs/en/application-note/AN12650.pdf
 		self._send([PN5180_LOAD_RF_CONFIG, 0x0D, 0x8D])  # Loads the ISO 15693 protocol into the RF registers
 
@@ -242,7 +307,7 @@ class ISO15693(PN5180):
 		round_duration_ms = (time.time() - round_start) * 1000
 		print(f"[inventory] duration={round_duration_ms:.1f}ms slot_responses={slot_responses} kept={len(uids)} sof_mismatches={self._sof_rxstatus_mismatches} sys=0x{sys_status:08x} rf=0x{rf_status:08x}")
 
-		if sys_status == 0:
+		if sys_status == 0 and self._recovery_failures < 4:
 			self._chip_reset()
 
 		return uids
@@ -261,7 +326,7 @@ class ISO14443(PN5180):
 		self._send([PN5180_SEND_DATA, 0x00, cascade_level, 0x20])
 		# Short guard delay before RX check (was 0.5s and dominated every poll).
 		time.sleep(0.005)
-		if self._card_has_responded(sof_retry=False):
+		if self._card_has_responded():
 			self._send([PN5180_READ_DATA, 0x00])  # Command READ_DATA - Reads the reception Buffer
 			data = self._read(5)  # We shall read the buffer from SPI MISO
 			self._log("Buffer: ", self._log_format_hex(data))
@@ -275,8 +340,7 @@ class ISO14443(PN5180):
 				self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x03, 0x00, 0x00, 0x00])  # Activates TRANSCEIVE routine
 				self._send([PN5180_WRITE_REGISTER, IRQ_CLEAR, 0xFF, 0xFF, 0x0F, 0x00])  # Clears the interrupt register IRQ_STATUS
 				self._send([PN5180_SEND_DATA, 0x00, cascade_level, 0x70]+data)
-				time.sleep(0.005)
-				if self._card_has_responded(sof_retry=False):
+				if self._card_has_responded():
 					self._send([PN5180_READ_DATA, 0x00])  # Command READ_DATA - Reads the reception Buffer
 					sak = self._read(3)  # We shall read the buffer from SPI MISO
 					self._log("Buffer: ", self._log_format_hex(sak))
@@ -296,10 +360,7 @@ class ISO14443(PN5180):
 		Return UID when detected
 		:return:
 		"""
-		round_start = time.time()
 		uids = []
-		reqa_hit = False
-		anticollision_ok = False
 		# https://www.nxp.com/docs/en/application-note/AN12650.pdf
 		# https://www.nxp.com/docs/en/application-note/AN10834.pdf
 		self._send([PN5180_LOAD_RF_CONFIG, 0x00, 0x80])  # Loads the ISO 14443 - 106 protocol into the RF registers
@@ -311,9 +372,8 @@ class ISO14443(PN5180):
 		self._send([PN5180_WRITE_REGISTER_OR_MASK, SYSTEM_CONFIG, 0x03, 0x00, 0x00, 0x00])  # Activates TRANSCEIVE routine
 		time.sleep(0.005) # Wait 5 ms before sending REQA
 		self._send([PN5180_SEND_DATA, 0x07, 0x26])  # Sends REQA command to check if at least 1 card in field
-		time.sleep(0.005)  # let ATQA land in RX buffer (matches anticollision guard)
-		if self._card_has_responded(sof_retry=False):
-			reqa_hit = True
+
+		if self._card_has_responded():
 			self._send([PN5180_READ_DATA, 0x00])  # Command READ_DATA - Reads the reception Buffer
 			atqa = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 			# uid_buffer = self._read(255)  # We shall read the buffer from SPI MISO
@@ -321,27 +381,12 @@ class ISO14443(PN5180):
 			try:
 				uid = self._anticollision()
 				uids.append(uid)
-				anticollision_ok = True
 			except Exception as e:
-				self._log("ISO14443 anticollision failed:", repr(e))
+				pass
 			#self._send([0x09, 0x07, 0x93, 0x20])
 			#uid_buffer = self._read(self._bytes_in_card_buffer)  # We shall read the buffer from SPI MISO -  Everything in the reception buffer shall be saved into the UIDbuffer array.
 			#self._log(uid_buffer)
 
 		self._send([0x17, 0x00])  # Switch OFF RF field
 		#GPIO.output(16, GPIO.HIGH)
-
-		self._send([PN5180_READ_REGISTER, SYSTEM_STATUS])
-		sys_status = int.from_bytes(self._read(4), byteorder='little')
-		self._send([PN5180_READ_REGISTER, RF_STATUS])
-		rf_status = int.from_bytes(self._read(4), byteorder='little')
-		round_duration_ms = (time.time() - round_start) * 1000
-		print(
-			f"[inventory] duration={round_duration_ms:.1f}ms reqa={reqa_hit} anticollision={anticollision_ok} "
-			f"kept={len(uids)} sys=0x{sys_status:08x} rf=0x{rf_status:08x}"
-		)
-
-		if sys_status == 0:
-			self._chip_reset()
-
 		return uids

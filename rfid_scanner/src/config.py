@@ -8,8 +8,11 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 SCAN_DIR = Path(__file__).resolve().parents[1]
+
+RfidProtocol = Literal["14443", "15693"]
 
 
 @dataclass
@@ -30,7 +33,6 @@ class ScannerConfig:
     verbose: bool
     interval: float
     display_url: str
-    default_spell: str
     tag_spells_path: Path
     combo_spells_path: Path
     spell_cooldown: float
@@ -46,6 +48,8 @@ class ScannerConfig:
     use_mock_readers: bool = False
     debug_logging: bool = False
     log_file: Path | None = None
+    protocol: RfidProtocol = "14443"
+    default_spell: str | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,8 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--spell",
-        default="fireball",
-        help="default spell when a UID is not listed in the tag map (default fireball)",
+        default=None,
+        metavar="NAME",
+        help="optional fallback spell when a UID is not listed in the tag map",
     )
     ap.add_argument(
         "--scanner",
@@ -178,6 +183,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not prompt for unknown tags; use default spell only",
     )
     ap.add_argument(
+        "--protocol",
+        choices=("14443", "15693"),
+        default="14443",
+        help=(
+            "RFID protocol for PN5180 inventory (default 14443). "
+            "15693 uses byte-reversed UIDs in pyPN5180 — re-bind tag_spells.json "
+            "when switching."
+        ),
+    )
+    ap.add_argument(
         "--mock-readers",
         action="store_true",
         help="use empty MockReaders instead of real PN5180 hardware (dev only)",
@@ -222,7 +237,7 @@ def config_from_args(args: argparse.Namespace) -> ScannerConfig:
         display_timeout=args.display_timeout,
         api_key=api_key,
         quiet_polls=args.quiet_polls,
-        log_misses=args.log_misses,
+        log_misses=args.log_misses or (args.test_scanner is not None and not args.quiet_polls),
         bind_timeout=args.bind_timeout,
         no_bind_prompt=args.no_bind_prompt,
         scanners=scanners,
@@ -231,4 +246,5 @@ def config_from_args(args: argparse.Namespace) -> ScannerConfig:
         use_mock_readers=args.mock_readers,
         debug_logging=args.debug,
         log_file=args.log_file,
+        protocol=args.protocol,
     )

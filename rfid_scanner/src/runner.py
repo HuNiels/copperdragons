@@ -92,8 +92,9 @@ def run_all(
     signal.signal(signal.SIGTERM, _stop)
 
     log.info(
-        "framework up; scanners=%s display=%s combos=%d cooldown=%ss; Ctrl-C to quit",
+        "framework up; scanners=%s protocol=ISO%s display=%s combos=%d cooldown=%ss; Ctrl-C to quit",
         ",".join(hw.scanner_id for hw in cfg.scanners),
+        cfg.protocol,
         cfg.display_url,
         controller.combo_count,
         cfg.spell_cooldown,
@@ -137,10 +138,11 @@ def run_test_mode(cfg: ScannerConfig, scanner_id: str, reader: Reader, tag_spell
     signal.signal(signal.SIGTERM, _sigterm)
 
     log.info(
-        "test-mode up; scanner=%s display=%s default_spell=%s tag_spells=%s (%d uid(s)) cooldown=%ss; Ctrl-C to quit",
+        "test-mode up; scanner=%s protocol=ISO%s display=%s default_spell=%s tag_spells=%s (%d uid(s)) cooldown=%ss; Ctrl-C to quit",
         scanner_id,
+        cfg.protocol,
         cfg.display_url,
-        cfg.default_spell,
+        cfg.default_spell or "-",
         cfg.tag_spells_path,
         len(tag_spells),
         cfg.spell_cooldown,
@@ -210,7 +212,11 @@ def run_test_mode(cfg: ScannerConfig, scanner_id: str, reader: Reader, tag_spell
                     binding_prompted,
                 )
 
-            spell_name = tag_spells.get(uid, cfg.default_spell)
+            spell_name = tag_spells.get(uid) if uid in tag_spells else cfg.default_spell
+            if spell_name is None:
+                log.debug("test-mode: unknown uid=%s with no --spell fallback; skipping", primary_uid)
+                time.sleep(cfg.interval)
+                continue
             now = time.monotonic()
             last = last_spell_at.get(primary_uid)
             if last is not None and (now - last < cfg.spell_cooldown):
